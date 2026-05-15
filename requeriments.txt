@@ -1,0 +1,58 @@
+📄 Requerimento de Documentação Técnica: Projeto RouteDump
+
+Empresa: GCS Core System Intelligence Desenvolvedor: Gustavo Geraldo Campos da Silva Data do Relatório: 14 de maio de 2026 
+Status do Projeto: Versão Pro (Extração Multimodal)  
+
+1. Objetivo da Aplicação
+O RouteDump é uma ferramenta de automação desenvolvida para otimizar a migração de itinerários de transporte coletivo do formato PDF para sistemas de gestão (como o Movet). A aplicação elimina a necessidade de digitação manual, reduzindo erros operacionais e garantindo a integridade dos dados geográficos e logradouros.  
+
+2. Funcionalidades Implementadas
+A. Módulo de Interface (Streamlit)
+
+Gestão de Sessão: Exibição dinâmica de data e hora do processamento na barra lateral para controle de auditoria.  
+
+
+Upload Inteligente: Suporte para arquivos PDF extraídos do sistema Moovit.  
+
+
+Seleção de Atendimentos: Filtro dinâmico que permite ao usuário escolher exatamente quais sentidos da linha (Ida, Volta ou Variações) deseja processar, evitando confusão em linhas com múltiplos atendimentos.  
+
+B. Extração de Dados (Lógica de Backend)
+
+Processamento de Texto: Utilização da biblioteca pdfplumber para converter dados geoespaciais em strings manipuláveis.  
+
+
+Filtragem por Prefixos: O sistema reconhece apenas logradouros válidos (Avenidas, Ruas, Estradas, Terminais e Cais), ignorando ruídos como tabelas de horários ou avisos do sistema.  
+
+
+Limpeza via Regex: Uso de Expressões Regulares para remover informações grudadas aos nomes das ruas, como o número de paradas ou duração da viagem.  
+
+C. Lógica de Negócio (Sequenciamento de Transporte)
+
+Rotação de Itinerário (Início no Terminal): Identifica a posição do Ponto de Controle (Terminal) e reorganiza a lista para que a viagem inicie obrigatoriamente no ponto zero, independentemente de como foi lida no PDF.  
+
+
+Fechamento de Ciclo: Se o itinerário extraído não retornar ao terminal, o código anexa automaticamente o ponto de partida ao final da lista, garantindo um ciclo fechado para o sistema Movet.  
+
+
+Organização de Ida e Volta: Permite a concatenação de sentidos opostos no mesmo arquivo TXT com separadores visuais para facilitar a leitura.  
+
+D. Extração de Mapeamento Visual
+
+Análise de Área: O script varre o PDF em busca do maior objeto gráfico (o mapa geográfico), descartando ícones pequenos e logos.  
+
+
+Renderização de Alta Resolução: Gera um arquivo PNG de 300 DPI para visualização e download imediato, servindo como prova documental do traçado.  
+
+3. Impacto Operacional
+
+Redução de Tempo: Estimativa de economia de 90% no tempo de cadastro de novas linhas no CLT.  
+
+
+Identidade Visual: Aplicação integrada ao ecossistema GCS Core System Intelligence, refletindo o foco da empresa em automação e dashboards inteligentes.  
+
+Assinado:
+GCS Core System Intelligence
+
+
+Departamento de Desenvolvimento de Sistemas e Análise de Dados
