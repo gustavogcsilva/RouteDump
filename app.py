@@ -3,25 +3,36 @@ import pdfplumber
 import re
 import io
 from datetime import datetime
+import pytz  # Necessário para garantir o Horário de Brasília
 
-st.set_page_config(page_title="GCS Intelligence - Gestor de Itinerários", layout="wide")
+st.set_page_config(page_title="RouteDump", layout="wide")
 
-# 1. DATA E HORA NA INTERFACE
+# 1. AJUSTE DO HORÁRIO PARA BRASÍLIA
 with st.sidebar:
     st.header("Sessão Ativa")
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    
+    # Define o fuso horário de Brasília de forma robusta, independente do servidor
+    fuso_brasilia = pytz.timezone('America/Sao_Paulo')
+    agora = datetime.now(fuso_brasilia).strftime("%d/%m/%Y %H:%M:%S")
+    
     st.write(f"🕒 **Processamento em:** {agora}")
     st.markdown("---")
     extrair_mapa = st.sidebar.checkbox("Extrair Mapa Geográfico", value=True)
 
-st.title(" RouteDump ")
-
+st.title("RouteDump")
 
 uploaded_file = st.file_uploader("Arraste o PDF ou adicione", type="pdf")
 
 if uploaded_file:
     with pdfplumber.open(uploaded_file) as pdf:
-        textos_paginas = [page.extract_text() for page in pdf.pages]
+        textos_paginas = []
+        for page in pdf.pages:
+            texto = page.extract_text()
+            if texto:
+                # CORREÇÃO DO "MANDARIM" (Remove caracteres não-ASCII bizarros que corrompem o texto)
+                texto_limpo = re.sub(r'[^\x00-\x7Fà-úÀ-ÚçÇªº\s\-.,:|/()#]', '', texto)
+                textos_paginas.append(texto_limpo)
+        
         full_text = "\n".join(textos_paginas)
         
         mapa_final = None
@@ -34,25 +45,37 @@ if uploaded_file:
                         if area > maior_area:
                             maior_area = area
                             bbox = (img_obj["x0"], img_obj["top"], img_obj["x1"], img_obj["bottom"])
-                            mapa_final = page.within_bbox(bbox).to_image(resolution=300).original
+                            try:
+                                mapa_final = page.within_bbox(bbox).to_image(resolution=300).original
+                            except Exception:
+                                pass # Previne travamentos se o crop falhar por milímetros
 
     linhas = full_text.split('\n')
     atendimentos = {}
     atendimento_atual = None
-    prefixos = ('Av.', 'Avenida', 'Rua', 'R.', 'Estrada', 'Viaduto', 'Praça', 'Terminal', 'Shopping', 'V.', 'Pátio', 'Br-', 'Cais')
+    
+    # Expandido e normalizado para cobrir variações de abreviação e capitais
+    prefixos = ('Av.', 'Avenida', 'Rua', 'R.', 'Estrada', 'Viaduto', 'Praça', 'Pr.', 'Terminal', 'Term.', 'Shopping', 'V.', 'Pátio', 'Br-', 'Cais', 'Rodovia', 'Rod.')
 
-    for linha in linhas:
-        l = linha.strip()
+    for l_crua in linhas:
+        l = l_crua.strip()
+        if not l:
+            continue
+            
         if "Tabela de horários sentido" in l:
             atendimento_atual = l.replace("Tabela de horários sentido ", "").strip()
             if atendimento_atual not in atendimentos:
                 atendimentos[atendimento_atual] = []
             continue
         
-        if atendimento_atual and (l.startswith(prefixos) or '|' in l):
-            if not re.search(r'\d{2}:\d{2}', l) and "Não Utilizar" not in l:
-                l_limpa = re.sub(r'Informações da linha.*|Paradas: \d+.*|Duração da viagem.*|VER OS HORÁRIOS.*', '', l).strip()
-                if l_limpa:
+        # CORREÇÃO DO CORTE NO FINAL: Captura as linhas finais mesmo sem prefixos óbvios se estiver no bloco
+        if atendimento_atual:
+            is_valid_ponto = l.startswith(prefixos) or '|' in l or (len(l) > 3 and not re.search(r'\d{2}:\d{2}', l) and "Não Utilizar" not in l)
+            
+            if is_valid_ponto:
+                l_limpa = re.sub(r'Informações da linha.*|Paradas: \d+.*|Duração da viagem.*|VER OS HORÁRIOS.*|Confira os horários.*', '', l).strip()
+                
+                if l_limpa and not re.match(r'^\d+$', l_limpa) and ":" not in l_limpa:
                     atendimentos[atendimento_atual].append(l_limpa)
 
     if atendimentos:
@@ -65,44 +88,71 @@ if uploaded_file:
         )
 
         resultado_txt = ""
+        dicionario_individuais = {} # Guarda os textos já processados para os botões individuais
 
         for nome in selecionados:
             pontos = atendimentos[nome]
-            if not pontos: continue
+            if not pontos: 
+                continue
 
-            # --- NOVA LÓGICA DE ROTAÇÃO: COLOCAR O TERMINAL NO INÍCIO ---
-            # Identifica o índice onde a palavra 'Terminal' ou o ponto de controle aparece pela primeira vez
+            # --- LÓGICA DE ROTAÇÃO: COLOCAR O TERMINAL NO INÍCIO ---
             idx_inicio = -1
             for i, p in enumerate(pontos):
-                if any(term in p for term in ["Terminal", "Ananias", "Cais"]):
+                if any(term.lower() in p.lower() for term in ["terminal", "ananias", "cais", "term."]):
                     idx_inicio = i
                     break
             
-            # Se achou o terminal no meio da lista, rotaciona a lista
             if idx_inicio != -1:
-                # O que estava do terminal pra frente vira o começo + o que estava antes vira o final
                 pontos = pontos[idx_inicio:] + pontos[:idx_inicio]
 
-            # Remove duplicatas consecutivas
+            # Remove duplicatas consecutivas de forma segura
             pontos_finais = []
             for p in pontos:
                 if not pontos_finais or p != pontos_finais[-1]:
                     pontos_finais.append(p)
 
-            # Montagem do bloco
-            resultado_txt += f"--- SENTIDO: {nome.upper()} ---\n"
-            resultado_txt += "\n".join(pontos_finais)
+            # Montagem do bloco de texto do sentido atual
+            txt_sentido = f"--- SENTIDO: {nome.upper()} ---\n"
+            txt_sentido += "\n".join(pontos_finais)
             
-            # Garante que termine no terminal para fechar o ciclo
-            if not any(term in pontos_finais[-1] for term in ["Terminal", "Ananias", "Cais"]):
-                resultado_txt += f"\n{pontos_finais[0]}"
+            # Garante o fechamento do ciclo de retorno ao terminal
+            if pontos_finais and not any(term.lower() in pontos_finais[-1].lower() for term in ["terminal", "ananias", "cais", "term."]):
+                txt_sentido += f"\n{pontos_finais[0]}"
             
-            resultado_txt += "\n\n" + ("="*30) + "\n\n"
+            # Salva para o download individual
+            dicionario_individuais[nome] = txt_sentido
+            
+            # Alimenta o text_area global
+            resultado_txt += txt_sentido + "\n\n" + ("="*30) + "\n\n"
 
+        # --- EXIBIÇÃO DO LAYOUT EM DUAS COLUNAS ---
         col1, col2 = st.columns([1, 1])
+        
         with col1:
             st.text_area("Itinerário Corrigido (Início no Terminal)", resultado_txt, height=500)
-            st.download_button("Baixar Itinerário (TXT)", resultado_txt, file_name="itinerario_corrigido_gcs.txt")
+            
+            st.markdown("### 📥 Opções de Download")
+            st.download_button(
+                label="📄 Baixar Itinerário Completo (TXT)", 
+                data=resultado_txt, 
+                file_name="itinerario_completo_gcs.txt",
+                mime="text/plain"
+            )
+            
+            # Gerador de botões individuais por sentido
+            if len(dicionario_individuais) > 1:
+                st.markdown("---")
+                st.caption("Ou baixe os sentidos individualmente:")
+                
+                for nome, txt_individual in dicionario_individuais.items():
+                    nome_arquivo = re.sub(r'[^a-zA-Z0-9_]', '_', nome.lower())
+                    st.download_button(
+                        label=f"➔ Baixar Sentido: {nome.upper()}",
+                        data=txt_individual,
+                        file_name=f"itinerario_{nome_arquivo}.txt",
+                        mime="text/plain",
+                        key=f"dl_{nome}"
+                    )
 
         with col2:
             if mapa_final:
@@ -112,14 +162,10 @@ if uploaded_file:
                 mapa_final.save(buf, format="PNG")
                 st.download_button("Baixar Mapa (PNG)", buf.getvalue(), file_name="mapa_itinerario.png")
 
+# O divisor fica fora das colunas para organizar melhor o rodapé
+st.divider()
 
-st.divider() # Linha horizontal nativa
-
-# Usando colunas para centralizar o conteúdo
 col_f1, col_f2, col_f3 = st.columns([1, 2, 1])
-
 with col_f2:
-
     st.markdown("### GCS Core System Intelligence")
-
     st.write("© 2026 - Todos os direitos reservados")
