@@ -44,7 +44,7 @@ def processar_itinerarios(full_text):
     """Processa o texto bruto do PDF, remove lixos institucionais agressivamente,
     corrige quebras de linha e limita repetições consecutivas."""
     
-    # 1. REMOÇÃO DE LIXO GLOBAL AGRESSIVA (Remove dias, horários e metadados textuais)
+    # 1. REMOÇÃO DE LIXO GLOBAL AGRESSIVA
     padroes_limpeza_global = [
         r"(?i)horários em tempo real dos ônibus, trem e metrô, e receber direções passo a passo durante todo o percurso!",
         r"(?i)\d+\s+pontos",
@@ -57,7 +57,9 @@ def processar_itinerarios(full_text):
         r"(?i)Resumo da linha:",
         r"(?i)Não Utilizar",
         r"(?i)DA LINHA",
-        r"(?i)Sentido:\s*[a-zA-Z0-9\s\/]+(?=Avenida|Rua|V\.|Av\.)" # Limpa cabeçalhos inline mutáveis
+        r"(?i)Informações de ônibus\s+\d+",   # NOVO: Filtra resíduos novos de linhas
+        r"(?i)Horários de ônibus\s+\d+",     # NOVO: Filtra resíduos novos de horários
+        r"(?i)Sentido:\s*[a-zA-Z0-9\s\/:-]+(?=Avenida|Rua|V\.|Av\.)" 
     ]
     
     texto_tratado = full_text
@@ -67,7 +69,6 @@ def processar_itinerarios(full_text):
     linhas_brutas = texto_tratado.split('\n')
     linhas_limpas = []
     
-    # Prefixos válidos para capturar e guiar o agrupamento de linhas estruturadas
     prefixos = ('Av.', 'Avenida', 'Rua', 'R.', 'Estrada', 'Viaduto', 'Praça', 'Pr.', 'Terminal', 'Term.', 'Shopping', 'V.', 'Pátio', 'Br-', 'Cais', 'Rodovia', 'Rod.', 'Travessa')
 
     # 2. RECONSTRUÇÃO DE LOGRADOUROS QUEBRADOS
@@ -76,13 +77,11 @@ def processar_itinerarios(full_text):
         if not l or l == ")": 
             continue
             
-        # Captura delimitadores de Sentido e limpa resíduos comuns da quebra de página
         if "SENTIDO:" in l or "Tabela de horários sentido" in l:
             linhas_limpas.append(l)
             continue
 
         if linhas_limpas and not l.startswith(prefixos) and not "SENTIDO:" in linhas_limpas[-1]:
-            # Mescla com a linha anterior se for continuação do endereço
             linhas_limpas[-1] = f"{linhas_limpas[-1]} {l}".strip()
         else:
             linhas_limpas.append(l)
@@ -97,7 +96,6 @@ def processar_itinerarios(full_text):
     ]
 
     for l in linhas_limpas:
-        # Detecta o início de um sentido (suporta formato do log bruto ou do PDF original)
         if "--- SENTIDO:" in l:
             atendimento_atual = l.replace("--- SENTIDO:", "").replace("---", "").strip()
             if atendimento_atual not in atendimentos:
@@ -117,12 +115,12 @@ def processar_itinerarios(full_text):
             
             if is_valid_ponto:
                 l_limpa = re.sub(r'(?i)Informações da linha.*|Paradas: \d+.*|Duração da viagem.*|Central\)', '', l).strip()
-                l_limpa = re.sub(r'\s+', ' ', l_limpa) # Remove espaçamentos duplos internos
+                l_limpa = re.sub(r'\s+', ' ', l_limpa) 
                 
                 if l_limpa and not re.match(r'^\d+$', l_limpa) and l_limpa != "|":
                     atendimentos[atendimento_atual].append(l_limpa)
                     
-    # 4. LIMITADOR DE REPETIÇÃO MÁXIMA DE 3 LOGRADOUROS CONSECUTIVOS IGUAIS
+    # 4. LIMITADOR DE REPETIÇÃO MÁXIMA (ATÉ 3)
     atendimentos_filtrados = {}
     for sentido, pontos in atendimentos.items():
         pontos_filtrados = []
@@ -137,7 +135,6 @@ def processar_itinerarios(full_text):
                 else:
                     contador_repeticao = 1
                 
-                # Só adiciona se não tiver repetido mais do que 3 vezes seguidas
                 if contador_repeticao <= 3:
                     pontos_filtrados.append(p)
                     
@@ -168,7 +165,6 @@ if uploaded_file:
         st.subheader("Seleção de Atendimentos")
         opcoes = list(atendimentos.keys())
         
-        # Seleciona por padrão todos os sentidos que forem encontrados no arquivo
         selecionados = st.multiselect(
             "Selecione os sentidos para visualização/download:", 
             options=opcoes, 
@@ -183,7 +179,7 @@ if uploaded_file:
             if not pontos: 
                 continue
 
-            # ROTAÇÃO: COLOCAR O TERMINAL NO INÍCIO IF ANY
+            # ROTAÇÃO: COLOCAR O TERMINAL NO INÍCIO
             idx_inicio = -1
             for i, p in enumerate(pontos):
                 if any(term.lower() in p.lower() for term in ["terminal", "ananias", "cais", "term."]):
@@ -193,15 +189,17 @@ if uploaded_file:
             if idx_inicio != -1:
                 pontos = pontos[idx_inicio:] + pontos[:idx_inicio]
 
-            # Montagem estruturada do bloco de texto limpo
+            # Reconstrução local do texto deste sentido específico
             txt_sentido = f"--- SENTIDO: {nome.upper()} ---\n"
             txt_sentido += "\n".join(pontos)
             
-            # Força o fechamento de ciclo de retorno ao ponto inicial (Terminal)
             if pontos and not any(term.lower() in pontos[-1].lower() for term in ["terminal", "ananias", "cais", "term."]):
                 txt_sentido += f"\n{pontos[0]}"
             
+            # CORREÇÃO CRÍTICA: O dicionário agora guarda apenas a string individual, sem acumular as outras
             dicionario_individuais[nome] = txt_sentido
+            
+            # O bloco combinado global continua guardando tudo junto para o botão principal
             resultado_txt += txt_sentido + "\n\n" + ("="*30) + "\n\n"
 
         # --- EXIBIÇÃO EM DUAS COLUNAS ---
@@ -217,13 +215,14 @@ if uploaded_file:
                 mime="text/plain"
             )
             
-            if len(dicionario_individuais) > 1:
+            if len(dicionario_individuais) > 0:
                 st.markdown("---")
                 st.caption("Baixar os sentidos individualmente:")
                 
                 for nome, txt_individual in dicionario_individuais.items():
                     nome_arquivo = re.sub(r'[^a-zA-Z0-9_]', '_', nome.lower())
                     st.download_button(
+                        # Passado explicitamente 'txt_individual' garantindo o download isolado
                         label=f"➔ Baixar Sentido: {nome.upper()}",
                         data=txt_individual,
                         file_name=f"itinerario_{nome_arquivo}.txt",
