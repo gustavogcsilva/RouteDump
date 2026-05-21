@@ -8,48 +8,6 @@ import pytz
 # Configuração da página
 st.set_page_config(page_title="RouteDump", layout="wide")
 
-# --- INJEÇÃO DE ESTILO CUSTOMIZADO (PRETO E VERMELHO) ---
-st.markdown("""
-    <style>
-        /* Fundo geral escuro */
-        .stApp {
-            background-color: #111111;
-            color: #FFFFFF;
-        }
-        /* Títulos e Subtítulos em Vermelho */
-        h1, h2, h3, .stSubheader {
-            color: #FF3333 !important;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            font-weight: 700;
-        }
-        /* Customização dos Botões (Download e outros) */
-        div.stButton > button:first-child, div.download_button > button {
-            background-color: #CC0000 !important;
-            color: white !important;
-            border: 1px solid #FF3333 !important;
-            border-radius: 4px;
-            font-weight: bold;
-            transition: all 0.3s ease;
-        }
-        div.stButton > button:first-child:hover {
-            background-color: #FF3333 !important;
-            border-color: #FFFFFF !important;
-            box-shadow: 0 0 10px rgba(255, 51, 51, 0.6);
-        }
-        /* Sidebar customizada */
-        [data-testid="stSidebar"] {
-            background-color: #1A1A1A !important;
-            border-right: 2px solid #CC0000;
-        }
-        /* Divisores vermelhos */
-        hr {
-            border: 0;
-            height: 1px;
-            background: linear-gradient(to right, #FF3333, #111111);
-        }
-    </style>
-""", unsafe_gradient=True, unsafe_allow_html=True)
-
 
 # --- FUNÇÕES DE SUPORTE ---
 
