@@ -60,7 +60,7 @@ def processar_itinerarios(full_text):
         r"(?i)DA LINHA",
         r"(?i)Informações de ônibus\s+\d+",   
         r"(?i)Horários de ônibus\s+\d+",     
-        r"(?i)Via Horários de ônibus\s+\d+", # Remove resíduo inline específico solicitado
+        r"(?i)Via Horários de ônibus\s+\d+", 
         r"(?i)Sentido:\s*[a-zA-Z0-9\s\/:-]+(?=Avenida|Rua|V\.|Av\.)" 
     ]
     
@@ -71,7 +71,7 @@ def processar_itinerarios(full_text):
     linhas_brutas = texto_tratado.split('\n')
     linhas_limpas = []
     
-    prefixos = ('Av.', 'Avenida', 'Rua', 'R.', 'Estrada', 'Viaduto', 'Praça', 'Pr.', 'Terminal', 'Term.', 'Shopping', 'V.', 'Pátio', 'Br-', 'Cais', 'Rodovia', 'Rod.', 'Travessa')
+    prefixos = ('Av.', 'Avenida', 'Rua', 'R.', 'Estrada', 'Viaduto', 'Praça', 'Pr.', 'Terminal', 'Term.', 'Shopping', 'V.', 'Pátio', 'Br-', 'Cais', 'Rodovia', 'Rod.', 'Travessa', 'Derby')
 
     # 2. RECONSTRUÇÃO DE LOGRADOUROS QUEBRADOS
     for l_crua in linhas_brutas:
@@ -101,7 +101,6 @@ def processar_itinerarios(full_text):
         # Captura as alternâncias de sentido de forma exclusiva
         if "--- SENTIDO:" in l:
             atendimento_atual = l.replace("--- SENTIDO:", "").replace("---", "").strip()
-            # Remove pontos finais ou resíduos comuns do título do sentido
             atendimento_atual = re.sub(r'\.+$', '', atendimento_atual).strip()
             if atendimento_atual not in atendimentos:
                 atendimentos[atendimento_atual] = []
@@ -121,12 +120,26 @@ def processar_itinerarios(full_text):
             
             if is_valid_ponto:
                 l_limpa = re.sub(r'(?i)Informações da linha.*|Paradas: \d+.*|Duração da viagem.*|Central\)', '', l).strip()
-                # Limpezas agressivas extras direto na string final do logradouro
-                l_limpa = re.sub(r'(?i)Sentido:\s*[a-zA-Z0-9\s\/:-]+|Horários de ônibus\s*\d+|Shopping Recife\s*/\s*Riomar', '', l_limpa).strip()
+                
+                # --- CORREÇÃO AQUI: Expressões Regulares otimizadas para limpar os resíduos específicos ---
+                # Remove variações de "Shopping Recife / Riomar, sábado ..." por completo até o fim da linha
+                l_limpa = re.sub(r'(?i)Shopping Recife\s*/\s*Riomar.*$', '', l_limpa).strip()
+                
+                # Remove "Via Shopping Recife / Horários de ônibus..." e números residuais que sobram no final
+                l_limpa = re.sub(r'(?i)\s*Via Shopping Recife.*$', '', l_limpa).strip()
+                l_limpa = re.sub(r'(?i)\s*/\s*Horários de ônibus.*$', '', l_limpa).strip()
+                l_limpa = re.sub(r'(?i)Horários de ônibus\s*\d+.*$', '', l_limpa).strip()
+                
+                # Remove "Sentido:" inline e limpa espaços extras
+                l_limpa = re.sub(r'(?i)Sentido:\s*[a-zA-Z0-9\s\/:-]+', '', l_limpa).strip()
                 l_limpa = re.sub(r'\s+', ' ', l_limpa) 
                 
                 # Remove barras verticais órfãs no final resultantes de limpezas parciais
                 l_limpa = re.sub(r'\s*\|\s*$', '', l_limpa).strip()
+                
+                # Remove também se a linha tiver restado apenas o dia da semana e o horário de funcionamento solto
+                if re.search(r'(?i)(segunda|terça|quarta|quinta|sexta|sábado|domingo).*?\d{2}:\d{2}', l_limpa):
+                    continue
                 
                 if l_limpa and not re.match(r'^\d+$', l_limpa) and l_limpa != "|":
                     atendimentos[atendimento_atual].append(l_limpa)
@@ -207,7 +220,7 @@ if uploaded_file:
             if pontos and not any(term.lower() in pontos[-1].lower() for term in ["terminal", "ananias", "cais", "term."]):
                 txt_sentido += f"\n{pontos[0]}"
             
-            # SALVAMENTO ISOLADO CORRETO: Sem interferência das outras iterações do loop
+            # SALVAMENTO ISOLADO CORRETO
             dicionario_individuais[nome] = txt_sentido
             
             # Acúmulo estruturado apenas na exibição unificada em tela
@@ -234,7 +247,7 @@ if uploaded_file:
                     nome_arquivo = re.sub(r'[^a-zA-Z0-9_]', '_', nome.lower())
                     st.download_button(
                         label=f"➔ Baixar Sentido: {nome.upper()}",
-                        data=txt_individual, # Envia estritamente apenas os dados daquela chave isolada
+                        data=txt_individual, 
                         file_name=f"itinerario_{nome_arquivo}.txt",
                         mime="text/plain",
                         key=f"dl_{nome}"
