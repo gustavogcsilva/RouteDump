@@ -41,37 +41,53 @@ def extrair_maior_mapa(pdf):
     return mapa_final
 
 def processar_itinerarios(full_text):
-    """Processa o texto bruto do PDF e separa os pontos por sentido/atendimento."""
-    linhas = full_text.split('\n')
+    """Processa o texto bruto do PDF, remove lixos institucionais e reconstrói 
+    linhas quebradas de logradouros para mantê-las em uma única linha."""
+    
+    # 1. REMOÇÃO DE LIXO GLOBAL (Antes de quebrar em linhas)
+    # Remove propagandas do Moovit e marcadores de contagem de pontos espalhados
+    padroes_limpeza_global = [
+        r"(?i)horários em tempo real dos ônibus, trem e metrô, e receber direções passo a passo durante todo o percurso!",
+        r"(?i)\d+\s+pontos",
+        r"(?i)domingo Fora de Operação",
+        r"(?i)ver os horários",
+        r"(?i)confira os horários",
+        r"(?i)visualizar o pdf"
+    ]
+    
+    texto_tratado = full_text
+    for padrao in padroes_limpeza_global:
+        texto_tratado = re.sub(padrao, "", texto_tratado)
+
+    linhas_brutas = texto_tratado.split('\n')
+    linhas_limpas = []
+    
+    # 2. RECONSTRUÇÃO DE LINHAS QUEBRADAS (Logradouros em uma única linha)
+    # Se uma linha não começar com os prefixos padrão e a anterior for um logradouro, elas serão unidas
+    prefixos = ('Av.', 'Avenida', 'Rua', 'R.', 'Estrada', 'Viaduto', 'Praça', 'Pr.', 'Terminal', 'Term.', 'Shopping', 'V.', 'Pátio', 'Br-', 'Cais', 'Rodovia', 'Rod.', 'Travessa')
+
+    for l_crua in linhas_brutas:
+        l = l_crua.strip()
+        if not l or l == ")": # Ignora resíduos de parênteses isolados
+            continue
+            
+        # Se a linha atual não começa com prefixo e temos uma linha anterior, junta com a anterior
+        if linhas_limpas and not l.startswith(prefixos) and not "Tabela de horários sentido" in l:
+            # Junta com um espaço, removendo quebras de linha indesejadas dentro do endereço
+            linhas_limpas[-1] = f"{linhas_limpas[-1]} {l}".strip()
+        else:
+            linhas_limpas.append(l)
+
+    # 3. SEPARAÇÃO POR SENTIDO / ATENDIMENTO
     atendimentos = {}
     atendimento_atual = None
     
-    # Prefixos válidos de logradouros
-    prefixos = ('Av.', 'Avenida', 'Rua', 'R.', 'Estrada', 'Viaduto', 'Praça', 'Pr.', 'Terminal', 'Term.', 'Shopping', 'V.', 'Pátio', 'Br-', 'Cais', 'Rodovia', 'Rod.')
-
-    # CORREÇÃO DOS BAD ESCAPES: Trocado \c e \a por classes de caracteres normais e grupos limpos
     padroes_bloqueados = [
-        r"moovit", 
-        r"use o", 
-        r"na regi", 
-        r"baixe o", 
-        r"app", 
-        r"gratuito", 
-        r"paradas\s*:", 
-        r"dura(ç|c)ao",            # Corrigido aqui
-        r"ver os hor", 
-        r"confira os", 
-        r"informa(ç|c)oes da linha", # Corrigido aqui
-        r"tabela de hor", 
-        r"visualizar o pdf",
-        r"hor(á|a)rios da linha"     # Corrigido aqui
+        r"moovit", r"use o", r"na regi", r"baixe o", r"app", r"gratuito", 
+        r"paradas\s*:", r"dura(ç|c)ao", r"informa(ç|c)oes da linha", r"tabela de hor", r"hor(á|a)rios da linha"
     ]
 
-    for l_crua in linhas:
-        l = l_crua.strip()
-        if not l:
-            continue
-            
+    for l in linhas_limpas:
         if "Tabela de horários sentido" in l:
             atendimento_atual = l.replace("Tabela de horários sentido ", "").strip()
             if atendimento_atual not in atendimentos:
@@ -79,20 +95,21 @@ def processar_itinerarios(full_text):
             continue
         
         if atendimento_atual:
-            # 1. Verifica se a linha contém alguma frase institucional/lixo do Moovit
-            contem_lixo = any(re.search(padrao, l, re.IGNORECASE) for padrao in padroes_bloqueados)
-            if contem_lixo:
-                continue 
+            # Filtro de segurança contra frases institucionais remanescentes
+            if any(re.search(padrao, l, re.IGNORECASE) for padrao in padroes_bloqueados):
+                continue
             
-            # 2. Mantém a captura flexível se a linha for válida
+            # Captura flexível de pontos válidos
             is_valid_ponto = l.startswith(prefixos) or '|' in l or (len(l) > 3 and not re.search(r'\d{2}:\d{2}', l) and "Não Utilizar" not in l)
             
             if is_valid_ponto:
-                # Limpeza interna fina
-                l_limpa = re.sub(r'Informações da linha.*|Paradas: \d+.*|Duração da viagem.*|VER OS HORÁRIOS.*|Confira os horários.*', '', l, flags=re.IGNORECASE).strip()
+                # Limpeza fina interna
+                l_limpa = re.sub(r'(?i)Informações da linha.*|Paradas: \d+.*|Duração da viagem.*|Central\)', '', l).strip()
                 
-                # Validação final para garantir que não restaram linhas puramente numéricas ou vazias
-                if l_limpa and not re.match(r'^\d+$', l_limpa) and ":" not in l_limpa:
+                # Evita linhas puramente numéricas, vazias ou que restaram apenas caracteres especiais
+                if l_limpa and not re.match(r'^\d+$', l_limpa) and l_limpa != "|":
+                    # Remove múltiplos espaços gerados pelas junções
+                    l_limpa = re.sub(r'\s+', ' ', l_limpa)
                     atendimentos[atendimento_atual].append(l_limpa)
                     
     return atendimentos
@@ -155,7 +172,7 @@ if uploaded_file:
             txt_sentido = f"--- SENTIDO: {nome.upper()} ---\n"
             txt_sentido += "\n".join(pontos_finais)
             
-            # Garante o fechamento do ciclo de retorno ao terminal
+            # Garante o fechamento terminal
             if pontos_finais and not any(term.lower() in pontos_finais[-1].lower() for term in ["terminal", "ananias", "cais", "term."]):
                 txt_sentido += f"\n{pontos_finais[0]}"
             
