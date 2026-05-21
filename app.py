@@ -8,6 +8,49 @@ import pytz
 # Configuração da página
 st.set_page_config(page_title="RouteDump", layout="wide")
 
+# --- INJEÇÃO DE ESTILO CUSTOMIZADO (PRETO E VERMELHO) ---
+st.markdown("""
+    <style>
+        /* Fundo geral escuro */
+        .stApp {
+            background-color: #111111;
+            color: #FFFFFF;
+        }
+        /* Títulos e Subtítulos em Vermelho */
+        h1, h2, h3, .stSubheader {
+            color: #FF3333 !important;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-weight: 700;
+        }
+        /* Customização dos Botões (Download e outros) */
+        div.stButton > button:first-child, div.download_button > button {
+            background-color: #CC0000 !important;
+            color: white !important;
+            border: 1px solid #FF3333 !important;
+            border-radius: 4px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        div.stButton > button:first-child:hover {
+            background-color: #FF3333 !important;
+            border-color: #FFFFFF !important;
+            box-shadow: 0 0 10px rgba(255, 51, 51, 0.6);
+        }
+        /* Sidebar customizada */
+        [data-testid="stSidebar"] {
+            background-color: #1A1A1A !important;
+            border-right: 2px solid #CC0000;
+        }
+        /* Divisores vermelhos */
+        hr {
+            border: 0;
+            height: 1px;
+            background: linear-gradient(to right, #FF3333, #111111);
+        }
+    </style>
+""", unsafe_gradient=True, unsafe_allow_html=True)
+
+
 # --- FUNÇÕES DE SUPORTE ---
 
 def obter_horario_brasilia():
@@ -57,8 +100,9 @@ def processar_itinerarios(full_text):
         r"(?i)Resumo da linha:",
         r"(?i)Não Utilizar",
         r"(?i)DA LINHA",
-        r"(?i)Informações de ônibus\s+\d+",   # NOVO: Filtra resíduos novos de linhas
-        r"(?i)Horários de ônibus\s+\d+",     # NOVO: Filtra resíduos novos de horários
+        r"(?i)Informações de ônibus\s+\d+",   
+        r"(?i)Horários de ônibus\s+\d+",     
+        r"(?i)Via Horários de ônibus\s+\d+", # Remove resíduo inline específico solicitado
         r"(?i)Sentido:\s*[a-zA-Z0-9\s\/:-]+(?=Avenida|Rua|V\.|Av\.)" 
     ]
     
@@ -86,7 +130,7 @@ def processar_itinerarios(full_text):
         else:
             linhas_limpas.append(l)
 
-    # 3. SEPARAÇÃO E STRIPPING POR ATENDIMENTO
+    # 3. SEPARAÇÃO E STRIPPING POR ATENDIMENTO (Isola de verdade cada sentido)
     atendimentos = {}
     atendimento_atual = None
     
@@ -96,13 +140,17 @@ def processar_itinerarios(full_text):
     ]
 
     for l in linhas_limpas:
+        # Captura as alternâncias de sentido de forma exclusiva
         if "--- SENTIDO:" in l:
             atendimento_atual = l.replace("--- SENTIDO:", "").replace("---", "").strip()
+            # Remove pontos finais ou resíduos comuns do título do sentido
+            atendimento_atual = re.sub(r'\.+$', '', atendimento_atual).strip()
             if atendimento_atual not in atendimentos:
                 atendimentos[atendimento_atual] = []
             continue
         elif "Tabela de horários sentido" in l:
             atendimento_atual = l.replace("Tabela de horários sentido ", "").strip()
+            atendimento_atual = re.sub(r'\.+$', '', atendimento_atual).strip()
             if atendimento_atual not in atendimentos:
                 atendimentos[atendimento_atual] = []
             continue
@@ -115,7 +163,12 @@ def processar_itinerarios(full_text):
             
             if is_valid_ponto:
                 l_limpa = re.sub(r'(?i)Informações da linha.*|Paradas: \d+.*|Duração da viagem.*|Central\)', '', l).strip()
+                # Limpezas agressivas extras direto na string final do logradouro
+                l_limpa = re.sub(r'(?i)Sentido:\s*[a-zA-Z0-9\s\/:-]+|Horários de ônibus\s*\d+|Shopping Recife\s*/\s*Riomar', '', l_limpa).strip()
                 l_limpa = re.sub(r'\s+', ' ', l_limpa) 
+                
+                # Remove barras verticais órfãs no final resultantes de limpezas parciais
+                l_limpa = re.sub(r'\s*\|\s*$', '', l_limpa).strip()
                 
                 if l_limpa and not re.match(r'^\d+$', l_limpa) and l_limpa != "|":
                     atendimentos[atendimento_atual].append(l_limpa)
@@ -189,17 +242,17 @@ if uploaded_file:
             if idx_inicio != -1:
                 pontos = pontos[idx_inicio:] + pontos[:idx_inicio]
 
-            # Reconstrução local do texto deste sentido específico
+            # Reconstrução local e exclusiva do texto deste sentido
             txt_sentido = f"--- SENTIDO: {nome.upper()} ---\n"
             txt_sentido += "\n".join(pontos)
             
             if pontos and not any(term.lower() in pontos[-1].lower() for term in ["terminal", "ananias", "cais", "term."]):
                 txt_sentido += f"\n{pontos[0]}"
             
-            # CORREÇÃO CRÍTICA: O dicionário agora guarda apenas a string individual, sem acumular as outras
+            # SALVAMENTO ISOLADO CORRETO: Sem interferência das outras iterações do loop
             dicionario_individuais[nome] = txt_sentido
             
-            # O bloco combinado global continua guardando tudo junto para o botão principal
+            # Acúmulo estruturado apenas na exibição unificada em tela
             resultado_txt += txt_sentido + "\n\n" + ("="*30) + "\n\n"
 
         # --- EXIBIÇÃO EM DUAS COLUNAS ---
@@ -222,9 +275,8 @@ if uploaded_file:
                 for nome, txt_individual in dicionario_individuais.items():
                     nome_arquivo = re.sub(r'[^a-zA-Z0-9_]', '_', nome.lower())
                     st.download_button(
-                        # Passado explicitamente 'txt_individual' garantindo o download isolado
                         label=f"➔ Baixar Sentido: {nome.upper()}",
-                        data=txt_individual,
+                        data=txt_individual, # Envia estritamente apenas os dados daquela chave isolada
                         file_name=f"itinerario_{nome_arquivo}.txt",
                         mime="text/plain",
                         key=f"dl_{nome}"
