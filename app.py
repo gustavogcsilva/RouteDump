@@ -43,7 +43,7 @@ def extrair_maior_mapa(pdf):
 
 def processar_itinerarios(full_text):
     """Processa o texto bruto do PDF, remove lixos institucionais agressivamente,
-    corrige quebras de linha e limita repetições consecutivas."""
+    corrige quebras de linha e separa rigidamente por bloco de atendimento."""
     
     # 1. REMOÇÃO DE LIXO GLOBAL AGRESSIVA
     padroes_limpeza_global = [
@@ -52,6 +52,8 @@ def processar_itinerarios(full_text):
         r"(?i)(segunda|terça|quarta|quinta|sexta|sábado|domingo)-feira\s+\d{2}:\d{2}-\d{2}:\d{2}",
         r"(?i)domingo\s+\d{2}:\d{2}-\d{2}:\d{2}",
         r"(?i)domingo Fora de Operação",
+        r"(?i)sábado\s+\d{2}:\d{2}-\d{2}:\d{2}",
+        r"(?i)sábado Fora de Operação",
         r"(?i)ver os horários",
         r"(?i)confira os horários",
         r"(?i)visualizar o pdf",
@@ -60,7 +62,7 @@ def processar_itinerarios(full_text):
         r"(?i)DA LINHA",
         r"(?i)Informações de ônibus\s+\d+",   
         r"(?i)Horários de ônibus\s+\d+",     
-        r"(?i)Via Horários de ônibus\s+\d+", # Remove resíduo inline específico solicitado
+        r"(?i)Via Horários de ônibus\s+\d+",
         r"(?i)Sentido:\s*[a-zA-Z0-9\s\/:-]+(?=Avenida|Rua|V\.|Av\.)" 
     ]
     
@@ -76,19 +78,19 @@ def processar_itinerarios(full_text):
     # 2. RECONSTRUÇÃO DE LOGRADOUROS QUEBRADOS
     for l_crua in linhas_brutas:
         l = l_crua.strip()
-        if not l or l == ")": 
+        if not l or l == ")" or l == "==============================": 
             continue
             
-        if "SENTIDO:" in l or "Tabela de horários sentido" in l:
-            linhas_limpas.append(l)
+        if "SENTIDO:" in l.upper() or "TABELA DE HORÁRIOS SENTIDO" in l.upper():
+            linhas_limpas.append(f"--- SENTIDO_HEADER: {l} ---")
             continue
 
-        if linhas_limpas and not l.startswith(prefixos) and not "SENTIDO:" in linhas_limpas[-1]:
+        if linhas_limpas and not l.startswith(prefixos) and not "SENTIDO_HEADER:" in linhas_limpas[-1]:
             linhas_limpas[-1] = f"{linhas_limpas[-1]} {l}".strip()
         else:
             linhas_limpas.append(l)
 
-    # 3. SEPARAÇÃO E STRIPPING POR ATENDIMENTO (Isola de verdade cada sentido)
+    # 3. SEPARAÇÃO RIGOROSA POR ATENDIMENTO
     atendimentos = {}
     atendimento_atual = None
     
@@ -98,17 +100,13 @@ def processar_itinerarios(full_text):
     ]
 
     for l in linhas_limpas:
-        # Captura as alternâncias de sentido de forma exclusiva
-        if "--- SENTIDO:" in l:
-            atendimento_atual = l.replace("--- SENTIDO:", "").replace("---", "").strip()
-            # Remove pontos finais ou resíduos comuns do título do sentido
-            atendimento_atual = re.sub(r'\.+$', '', atendimento_atual).strip()
-            if atendimento_atual not in atendimentos:
-                atendimentos[atendimento_atual] = []
-            continue
-        elif "Tabela de horários sentido" in l:
-            atendimento_atual = l.replace("Tabela de horários sentido ", "").strip()
-            atendimento_atual = re.sub(r'\.+$', '', atendimento_atual).strip()
+        if "SENTIDO_HEADER:" in l:
+            # Extrai e limpa o nome do sentido/atendimento
+            nome_sentido = l.replace("--- SENTIDO_HEADER:", "").replace("---", "").replace("SENTIDO:", "").replace("Tabela de horários sentido", "").strip()
+            nome_sentido = re.sub(r'^[-\s:=]+|[-\s:=]+$', '', nome_sentido)
+            nome_sentido = re.sub(r'\.+$', '', nome_sentido).strip()
+            
+            atendimento_atual = nome_sentido
             if atendimento_atual not in atendimentos:
                 atendimentos[atendimento_atual] = []
             continue
@@ -121,17 +119,14 @@ def processar_itinerarios(full_text):
             
             if is_valid_ponto:
                 l_limpa = re.sub(r'(?i)Informações da linha.*|Paradas: \d+.*|Duração da viagem.*|Central\)', '', l).strip()
-                # Limpezas agressivas extras direto na string final do logradouro
                 l_limpa = re.sub(r'(?i)Sentido:\s*[a-zA-Z0-9\s\/:-]+|Horários de ônibus\s*\d+|Shopping Recife\s*/\s*Riomar', '', l_limpa).strip()
                 l_limpa = re.sub(r'\s+', ' ', l_limpa) 
-                
-                # Remove barras verticais órfãs no final resultantes de limpezas parciais
                 l_limpa = re.sub(r'\s*\|\s*$', '', l_limpa).strip()
                 
                 if l_limpa and not re.match(r'^\d+$', l_limpa) and l_limpa != "|":
                     atendimentos[atendimento_atual].append(l_limpa)
                     
-    # 4. LIMITADOR DE REPETIÇÃO MÁXIMA (ATÉ 3)
+    # 4. FILTRAR REPETIÇÕES CONSECUTIVAS EM CADA SENTIDO
     atendimentos_filtrados = {}
     for sentido, pontos in atendimentos.items():
         pontos_filtrados = []
@@ -149,7 +144,8 @@ def processar_itinerarios(full_text):
                 if contador_repeticao <= 3:
                     pontos_filtrados.append(p)
                     
-        atendimentos_filtrados[sentido] = pontos_filtrados
+        if pontos_filtrados:
+            atendimentos_filtrados[sentido] = pontos_filtrados
 
     return atendimentos_filtrados
 
@@ -200,17 +196,15 @@ if uploaded_file:
             if idx_inicio != -1:
                 pontos = pontos[idx_inicio:] + pontos[:idx_inicio]
 
-            # Reconstrução local e exclusiva do texto deste sentido
+            # Reconstrução isolada do bloco de texto
             txt_sentido = f"--- SENTIDO: {nome.upper()} ---\n"
             txt_sentido += "\n".join(pontos)
             
+            # Adiciona o fechamento do circuito se o terminal não for o último ponto
             if pontos and not any(term.lower() in pontos[-1].lower() for term in ["terminal", "ananias", "cais", "term."]):
                 txt_sentido += f"\n{pontos[0]}"
             
-            # SALVAMENTO ISOLADO CORRETO: Sem interferência das outras iterações do loop
             dicionario_individuais[nome] = txt_sentido
-            
-            # Acúmulo estruturado apenas na exibição unificada em tela
             resultado_txt += txt_sentido + "\n\n" + ("="*30) + "\n\n"
 
         # --- EXIBIÇÃO EM DUAS COLUNAS ---
@@ -234,7 +228,7 @@ if uploaded_file:
                     nome_arquivo = re.sub(r'[^a-zA-Z0-9_]', '_', nome.lower())
                     st.download_button(
                         label=f"➔ Baixar Sentido: {nome.upper()}",
-                        data=txt_individual, # Envia estritamente apenas os dados daquela chave isolada
+                        data=txt_individual, 
                         file_name=f"itinerario_{nome_arquivo}.txt",
                         mime="text/plain",
                         key=f"dl_{nome}"
