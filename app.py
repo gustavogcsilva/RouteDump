@@ -57,6 +57,25 @@ if uploaded_file:
     # Expandido e normalizado para cobrir variações de abreviação e capitais
     prefixos = ('Av.', 'Avenida', 'Rua', 'R.', 'Estrada', 'Viaduto', 'Praça', 'Pr.', 'Terminal', 'Term.', 'Shopping', 'V.', 'Pátio', 'Br-', 'Cais', 'Rodovia', 'Rod.')
 
+    # --- NOVA LÓGICA DE FILTRAGEM AGRESSIVA (MOOVIT / LIXO DO PDF) ---
+    # Se a linha contiver qualquer um desses termos (ignorando maiúsculas/minúsculas), ela será descartada na hora
+    padroes_bloqueados = [
+        r"moovit", 
+        r"use o", 
+        r"na regi", 
+        r"baixe o", 
+        r"app", 
+        r"gratuito", 
+        r"paradas\s*:", 
+        r"dura\(\c|c\)ao", 
+        r"ver os hor", 
+        r"confira os", 
+        r"informa\(\c|c\)oes da linha", 
+        r"tabela de hor", 
+        r"visualizar o pdf",
+        r"hor\(\a|a\)rios da linha"
+    ]
+
     for l_crua in linhas:
         l = l_crua.strip()
         if not l:
@@ -68,13 +87,20 @@ if uploaded_file:
                 atendimentos[atendimento_atual] = []
             continue
         
-        # CORREÇÃO DO CORTE NO FINAL: Captura as linhas finais mesmo sem prefixos óbvios se estiver no bloco
         if atendimento_atual:
+            # 1. Verifica se a linha contém alguma frase institucional/lixo do Moovit
+            contem_lixo = any(re.search(padrao, l, re.IGNORECASE) for padrao in padroes_bloqueados)
+            if contem_lixo:
+                continue # Pula a linha se for propaganda/metadado
+            
+            # 2. Mantém a captura flexível se a linha for válida
             is_valid_ponto = l.startswith(prefixos) or '|' in l or (len(l) > 3 and not re.search(r'\d{2}:\d{2}', l) and "Não Utilizar" not in l)
             
             if is_valid_ponto:
-                l_limpa = re.sub(r'Informações da linha.*|Paradas: \d+.*|Duração da viagem.*|VER OS HORÁRIOS.*|Confira os horários.*', '', l).strip()
+                # Limpeza interna fina (caso sobre algum fragmento na mesma linha)
+                l_limpa = re.sub(r'Informações da linha.*|Paradas: \d+.*|Duração da viagem.*|VER OS HORÁRIOS.*|Confira os horários.*', '', l, flags=re.IGNORECASE).strip()
                 
+                # Validação final para garantir que não restaram linhas puramente numéricas ou vazias
                 if l_limpa and not re.match(r'^\d+$', l_limpa) and ":" not in l_limpa:
                     atendimentos[atendimento_atual].append(l_limpa)
 
@@ -129,7 +155,7 @@ if uploaded_file:
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            st.text_area("Itinerário Corrigido (Início no Terminal)", resultado_txt, height=500)
+            st.text_area("Itinerário ", resultado_txt, height=500)
             
             st.markdown("### 📥 Opções de Download")
             st.download_button(
