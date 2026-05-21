@@ -3,62 +3,53 @@ import pdfplumber
 import re
 import io
 from datetime import datetime
-import pytz  # Necessário para garantir o Horário de Brasília
+import pytz
 
+# Configuração da página
 st.set_page_config(page_title="RouteDump", layout="wide")
 
-# 1. AJUSTE DO HORÁRIO PARA BRASÍLIA
-with st.sidebar:
-    st.header("Sessão Ativa")
-    
-    # Define o fuso horário de Brasília de forma robusta, independente do servidor
+# --- FUNÇÕES DE SUPORTE (ORGANIZAÇÃO E PERFORMANCE) ---
+
+def obter_horario_brasilia():
+    """Retorna o horário atual formatado no fuso de Brasília."""
     fuso_brasilia = pytz.timezone('America/Sao_Paulo')
-    agora = datetime.now(fuso_brasilia).strftime("%d/%m/%Y %H:%M:%S")
+    return datetime.now(fuso_brasilia).strftime("%d/%m/%Y %H:%M:%S")
+
+def limpar_texto_pdf(texto):
+    """Remove caracteres não-ASCII bizarros que corrompem o texto."""
+    if not texto:
+        return ""
+    return re.sub(r'[^\x00-\x7Fà-úÀ-ÚçÇªº\s\-.,:|/()#]', '', texto)
+
+def extrair_maior_mapa(pdf):
+    """Busca e extrai a maior imagem (provavelmente o mapa) dentro do PDF."""
+    maior_area = 0
+    mapa_final = None
     
-    st.write(f"🕒 **Processamento em:** {agora}")
-    st.markdown("---")
-    extrair_mapa = st.sidebar.checkbox("Extrair Mapa Geográfico", value=True)
+    for page in pdf.pages:
+        if not page.images:
+            continue
+        for img_obj in page.images:
+            area = (img_obj["x1"] - img_obj["x0"]) * (img_obj["bottom"] - img_obj["top"])
+            if area > maior_area:
+                maior_area = area
+                bbox = (img_obj["x0"], img_obj["top"], img_obj["x1"], img_obj["bottom"])
+                try:
+                    mapa_final = page.within_bbox(bbox).to_image(resolution=300).original
+                except Exception:
+                    pass # Previne travamentos se o crop falhar por milímetros
+    return mapa_final
 
-st.title("RouteDump")
-
-uploaded_file = st.file_uploader("Arraste o PDF ou adicione", type="pdf")
-
-if uploaded_file:
-    with pdfplumber.open(uploaded_file) as pdf:
-        textos_paginas = []
-        for page in pdf.pages:
-            texto = page.extract_text()
-            if texto:
-                # CORREÇÃO DO "MANDARIM" (Remove caracteres não-ASCII bizarros que corrompem o texto)
-                texto_limpo = re.sub(r'[^\x00-\x7Fà-úÀ-ÚçÇªº\s\-.,:|/()#]', '', texto)
-                textos_paginas.append(texto_limpo)
-        
-        full_text = "\n".join(textos_paginas)
-        
-        mapa_final = None
-        if extrair_mapa:
-            maior_area = 0
-            for page in pdf.pages:
-                if page.images:
-                    for img_obj in page.images:
-                        area = (img_obj["x1"] - img_obj["x0"]) * (img_obj["bottom"] - img_obj["top"])
-                        if area > maior_area:
-                            maior_area = area
-                            bbox = (img_obj["x0"], img_obj["top"], img_obj["x1"], img_obj["bottom"])
-                            try:
-                                mapa_final = page.within_bbox(bbox).to_image(resolution=300).original
-                            except Exception:
-                                pass # Previne travamentos se o crop falhar por milímetros
-
+def processar_itinerarios(full_text):
+    """Processa o texto bruto do PDF e separa os pontos por sentido/atendimento."""
     linhas = full_text.split('\n')
     atendimentos = {}
     atendimento_atual = None
     
-    # Expandido e normalizado para cobrir variações de abreviação e capitais
+    # Prefixos válidos de logradouros
     prefixos = ('Av.', 'Avenida', 'Rua', 'R.', 'Estrada', 'Viaduto', 'Praça', 'Pr.', 'Terminal', 'Term.', 'Shopping', 'V.', 'Pátio', 'Br-', 'Cais', 'Rodovia', 'Rod.')
 
-    # --- NOVA LÓGICA DE FILTRAGEM AGRESSIVA (MOOVIT / LIXO DO PDF) ---
-    # Se a linha contiver qualquer um desses termos (ignorando maiúsculas/minúsculas), ela será descartada na hora
+    # CORREÇÃO DOS BAD ESCAPES: Trocado \c e \a por classes de caracteres normais e grupos limpos
     padroes_bloqueados = [
         r"moovit", 
         r"use o", 
@@ -67,13 +58,13 @@ if uploaded_file:
         r"app", 
         r"gratuito", 
         r"paradas\s*:", 
-        r"dura\(\c|c\)ao", 
+        r"dura(ç|c)ao",            # Corrigido aqui
         r"ver os hor", 
         r"confira os", 
-        r"informa\(\c|c\)oes da linha", 
+        r"informa(ç|c)oes da linha", # Corrigido aqui
         r"tabela de hor", 
         r"visualizar o pdf",
-        r"hor\(\a|a\)rios da linha"
+        r"hor(á|a)rios da linha"     # Corrigido aqui
     ]
 
     for l_crua in linhas:
@@ -91,18 +82,41 @@ if uploaded_file:
             # 1. Verifica se a linha contém alguma frase institucional/lixo do Moovit
             contem_lixo = any(re.search(padrao, l, re.IGNORECASE) for padrao in padroes_bloqueados)
             if contem_lixo:
-                continue # Pula a linha se for propaganda/metadado
+                continue 
             
             # 2. Mantém a captura flexível se a linha for válida
             is_valid_ponto = l.startswith(prefixos) or '|' in l or (len(l) > 3 and not re.search(r'\d{2}:\d{2}', l) and "Não Utilizar" not in l)
             
             if is_valid_ponto:
-                # Limpeza interna fina (caso sobre algum fragmento na mesma linha)
+                # Limpeza interna fina
                 l_limpa = re.sub(r'Informações da linha.*|Paradas: \d+.*|Duração da viagem.*|VER OS HORÁRIOS.*|Confira os horários.*', '', l, flags=re.IGNORECASE).strip()
                 
                 # Validação final para garantir que não restaram linhas puramente numéricas ou vazias
                 if l_limpa and not re.match(r'^\d+$', l_limpa) and ":" not in l_limpa:
                     atendimentos[atendimento_atual].append(l_limpa)
+                    
+    return atendimentos
+
+# --- INTERFACE DO STREAMLIT ---
+
+with st.sidebar:
+    st.header("Sessão Ativa")
+    st.write(f"🕒 **Processamento em:** {obter_horario_brasilia()}")
+    st.markdown("---")
+    extrair_mapa = st.sidebar.checkbox("Extrair Mapa Geográfico", value=True)
+
+st.title("RouteDump")
+uploaded_file = st.file_uploader("Arraste o PDF ou adicione", type="pdf")
+
+if uploaded_file:
+    # Processamento do PDF encapsulado
+    with pdfplumber.open(uploaded_file) as pdf:
+        textos_paginas = [limpar_texto_pdf(page.extract_text()) for page in pdf.pages]
+        full_text = "\n".join(textos_paginas)
+        
+        mapa_final = extrair_maior_mapa(pdf) if extrair_mapa else None
+
+    atendimentos = processar_itinerarios(full_text)
 
     if atendimentos:
         st.subheader("Seleção de Atendimentos")
@@ -114,7 +128,7 @@ if uploaded_file:
         )
 
         resultado_txt = ""
-        dicionario_individuais = {} # Guarda os textos já processados para os botões individuais
+        dicionario_individuais = {} 
 
         for nome in selecionados:
             pontos = atendimentos[nome]
@@ -145,18 +159,14 @@ if uploaded_file:
             if pontos_finais and not any(term.lower() in pontos_finais[-1].lower() for term in ["terminal", "ananias", "cais", "term."]):
                 txt_sentido += f"\n{pontos_finais[0]}"
             
-            # Salva para o download individual
             dicionario_individuais[nome] = txt_sentido
-            
-            # Alimenta o text_area global
             resultado_txt += txt_sentido + "\n\n" + ("="*30) + "\n\n"
 
         # --- EXIBIÇÃO DO LAYOUT EM DUAS COLUNAS ---
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            st.text_area("Itinerário ", resultado_txt, height=500)
-            
+            st.text_area("Itinerário", resultado_txt, height=500)
             st.markdown("### 📥 Opções de Download")
             st.download_button(
                 label="📄 Baixar Itinerário Completo (TXT)", 
@@ -165,7 +175,6 @@ if uploaded_file:
                 mime="text/plain"
             )
             
-            # Gerador de botões individuais por sentido
             if len(dicionario_individuais) > 1:
                 st.markdown("---")
                 st.caption("Ou baixe os sentidos individualmente:")
@@ -188,7 +197,6 @@ if uploaded_file:
                 mapa_final.save(buf, format="PNG")
                 st.download_button("Baixar Mapa (PNG)", buf.getvalue(), file_name="mapa_itinerario.png")
 
-# O divisor fica fora das colunas para organizar melhor o rodapé
 st.divider()
 
 col_f1, col_f2, col_f3 = st.columns([1, 2, 1])
